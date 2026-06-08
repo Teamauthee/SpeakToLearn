@@ -2,7 +2,6 @@
 
 import { useState, useRef } from "react";
 import { Mic, Loader2, Square } from "lucide-react";
-import { checkItalianGrammar } from "../lib/languagetool";
 import { KokoroTTS } from "kokoro-js";
 
 declare global {
