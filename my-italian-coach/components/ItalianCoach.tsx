@@ -2,64 +2,34 @@
 
 import { useState, useRef } from "react";
 import { Mic, Loader2, Square } from "lucide-react";
-import { KokoroTTS } from "kokoro-js";
-
-declare global {
-  interface Window {
-    SpeechRecognition: any;
-    webkitSpeechRecognition: any;
-  }
-}
-
-export {};
 
 export default function ItalianCoach() {
   const [isListening, setIsListening] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [feedback, setFeedback] = useState("");
-  const [ttsReady, setTtsReady] = useState(false);
   
-  const ttsRef = useRef<any>(null);
-  // Keep a persistent reference to the recognition instance across renders
   const recognitionRef = useRef<any>(null);
 
-  // 1. Initialize Kokoro TTS
-  const initTTS = async () => {
-    if (ttsReady) return;
-    setIsProcessing(true);
-    try {
-      ttsRef.current = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX');
-      setTtsReady(true);
-    } catch (error) {
-      console.error("TTS Init Error:", error);
-    }
-    setIsProcessing(false);
+  // 1. Native iOS Speech Synthesis
+  const speak = (textToSpeak: string) => {
+    // Cancel any currently speaking audio
+    window.speechSynthesis.cancel();
+    
+    const utterance = new SpeechSynthesisUtterance(textToSpeak);
+    utterance.lang = 'it-IT';
+    utterance.rate = 0.9; // Slightly slower to help him hear the pronunciation clearly
+    utterance.pitch = 1.0;
+    
+    window.speechSynthesis.speak(utterance);
   };
 
-  // 2. Speak the feedback
-  const speak = async (text: string) => {
-    if (!ttsRef.current) return;
-    const audioData = await ttsRef.current.generate(text, {
-      voice: 'im_nicola',
-      speed: 1.0
-    });
-    
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const buffer = audioContext.createBuffer(1, audioData.audio.length, audioData.sampling_rate);
-    buffer.getChannelData(0).set(audioData.audio);
-    
-    const source = audioContext.createBufferSource();
-    source.buffer = buffer;
-    source.connect(audioContext.destination);
-    source.start();
-  };
+  // 2. Start Recording
+  const startListening = () => {
+    // 'Unlock' the iOS speech synthesis engine on the initial user tap
+    window.speechSynthesis.speak(new SpeechSynthesisUtterance(''));
 
-  // 3. Start Recording
-  const startListening = async () => {
-    await initTTS();
-    
-    const SpeechRecognition = window.SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
       alert("Browser non supportato. Usa Safari su iOS.");
       return;
@@ -69,7 +39,6 @@ export default function ItalianCoach() {
     recognitionRef.current = recognition;
 
     recognition.lang = 'it-IT';
-    // continuous = true ensures it doesn't randomly cut off mid-sentence if he pauses to think
     recognition.continuous = true; 
     recognition.interimResults = false;
 
@@ -80,7 +49,6 @@ export default function ItalianCoach() {
     };
 
     recognition.onresult = async (event: any) => {
-      // Grab the compiled text from the speech session
       const currentResultIndex = event.resultIndex;
       const text = event.results[currentResultIndex][0].transcript;
       
@@ -89,21 +57,25 @@ export default function ItalianCoach() {
       setTranscript(text);
       setIsProcessing(true);
 
-      // Call LanguageTool Brain
-    // Call Groq LLM Brain via Next.js API
-    const response = await fetch('/api/coach', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text })
-    });
-    const result = await response.json();
-
-setFeedback(result.message);
-await speak(result.message);
-      
-      // Speak the result out loud
-      await speak(result.message);
-      setIsProcessing(false);
+      try {
+        // Call Groq LLM Brain via Next.js API
+        const response = await fetch('/api/coach', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text })
+        });
+        
+        const result = await response.json();
+        setFeedback(result.message);
+        
+        // Instantly speak the result
+        speak(result.message);
+      } catch (error) {
+        console.error("API Error:", error);
+        setFeedback("Scusa, c'è stato un errore di connessione.");
+      } finally {
+        setIsProcessing(false);
+      }
     };
 
     recognition.onerror = (err: any) => {
@@ -118,15 +90,14 @@ await speak(result.message);
     recognition.start();
   };
 
-  // 4. Manually Stop Recording (Forces transcription execution)
+  // 3. Manually Stop Recording
   const stopListening = () => {
     if (recognitionRef.current) {
-      recognitionRef.current.stop(); // This triggers onresult & onend sequentially
+      recognitionRef.current.stop();
       setIsListening(false);
     }
   };
 
-  // Toggle controller for the button
   const handleMicClick = () => {
     if (isListening) {
       stopListening();
@@ -152,14 +123,14 @@ await speak(result.message);
           {isProcessing ? (
             <Loader2 className="w-12 h-12 text-white animate-spin" />
           ) : isListening ? (
-            <Square className="w-12 h-12 text-white" /> // Shows a stop square when recording
+            <Square className="w-12 h-12 text-white" />
           ) : (
             <Mic className="w-12 h-12 text-white" />
           )}
         </button>
 
         <p className="text-sm text-gray-500 font-medium">
-          {isListening ? "Tocca per interrompere e ricevere feedback" : isProcessing ? "Elaborazione..." : "Tocca per parlare"}
+          {isListening ? "Tocca per interrompere e ricevere feedback" : isProcessing ? "L'insegnante sta pensando..." : "Tocca per parlare"}
         </p>
 
         {transcript && (
@@ -170,7 +141,7 @@ await speak(result.message);
         )}
 
         {feedback && (
-          <div className={`p-4 rounded-lg text-left ${feedback.includes("Perfetto") ? "bg-green-100 text-green-800" : "bg-orange-100 text-orange-800"}`}>
+          <div className={`p-4 rounded-lg text-left ${feedback.includes("Perfetto") ? "bg-green-100 text-green-800" : "bg-blue-100 text-blue-800"}`}>
             <p className="text-xs uppercase font-bold mb-1">Feedback:</p>
             <p className="text-lg">{feedback}</p>
           </div>
