@@ -1,9 +1,18 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { Mic, Loader2, Play } from "lucide-react";
+import { Mic, Loader2, Square } from "lucide-react";
 import { checkItalianGrammar } from "../lib/languagetool";
 import { KokoroTTS } from "kokoro-js";
+
+declare global {
+  interface Window {
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
+  }
+}
+
+export {};
 
 export default function ItalianCoach() {
   const [isListening, setIsListening] = useState(false);
@@ -13,8 +22,10 @@ export default function ItalianCoach() {
   const [ttsReady, setTtsReady] = useState(false);
   
   const ttsRef = useRef<any>(null);
+  // Keep a persistent reference to the recognition instance across renders
+  const recognitionRef = useRef<any>(null);
 
-  // 1. Initialize Kokoro TTS on first interaction
+  // 1. Initialize Kokoro TTS
   const initTTS = async () => {
     if (ttsReady) return;
     setIsProcessing(true);
@@ -27,11 +38,11 @@ export default function ItalianCoach() {
     setIsProcessing(false);
   };
 
-  // 2. Speak the feedback using Web Audio API
+  // 2. Speak the feedback
   const speak = async (text: string) => {
     if (!ttsRef.current) return;
     const audioData = await ttsRef.current.generate(text, {
-      voice: 'im_nicola', // Italian male voice
+      voice: 'im_nicola',
       speed: 1.0
     });
     
@@ -45,42 +56,76 @@ export default function ItalianCoach() {
     source.start();
   };
 
-  // 3. Handle the iOS Web Speech API
+  // 3. Start Recording
   const startListening = async () => {
-    await initTTS(); // Ensure audio context unlocks on tap
+    await initTTS();
     
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const SpeechRecognition = window.SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
       alert("Browser non supportato. Usa Safari su iOS.");
       return;
     }
 
     const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
+
     recognition.lang = 'it-IT';
+    // continuous = true ensures it doesn't randomly cut off mid-sentence if he pauses to think
+    recognition.continuous = true; 
     recognition.interimResults = false;
 
     recognition.onstart = () => {
       setIsListening(true);
+      setTranscript("");
       setFeedback("");
     };
 
     recognition.onresult = async (event: any) => {
-      const text = event.results[0][0].transcript;
+      // Grab the compiled text from the speech session
+      const currentResultIndex = event.resultIndex;
+      const text = event.results[currentResultIndex][0].transcript;
+      
+      if (!text.trim()) return;
+
       setTranscript(text);
-      setIsListening(false);
       setIsProcessing(true);
 
-      // Call LanguageTool
+      // Call LanguageTool Brain
       const result = await checkItalianGrammar(text);
       setFeedback(result.message);
       
-      // Speak the result
+      // Speak the result out loud
       await speak(result.message);
       setIsProcessing(false);
     };
 
-    recognition.onerror = () => setIsListening(false);
+    recognition.onerror = (err: any) => {
+      console.error("Speech Error:", err);
+      setIsListening(false);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
     recognition.start();
+  };
+
+  // 4. Manually Stop Recording (Forces transcription execution)
+  const stopListening = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop(); // This triggers onresult & onend sequentially
+      setIsListening(false);
+    }
+  };
+
+  // Toggle controller for the button
+  const handleMicClick = () => {
+    if (isListening) {
+      stopListening();
+    } else {
+      startListening();
+    }
   };
 
   return (
@@ -90,20 +135,24 @@ export default function ItalianCoach() {
       <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-6 text-center space-y-6">
         
         <button 
-          onClick={startListening}
-          disabled={isListening || isProcessing}
+          onClick={handleMicClick}
+          disabled={isProcessing}
           className={`w-32 h-32 rounded-full flex items-center justify-center mx-auto transition-all ${
-            isListening ? "bg-red-500 animate-pulse" : 
-            isProcessing ? "bg-gray-400" : "bg-blue-500 hover:bg-blue-600 shadow-xl"
+            isListening ? "bg-red-500 shadow-inner" : 
+            isProcessing ? "bg-gray-400 cursor-not-allowed" : "bg-blue-500 hover:bg-blue-600 shadow-xl"
           }`}
         >
-          {isProcessing ? <Loader2 className="w-12 h-12 text-white animate-spin" /> : 
-           isListening ? <Mic className="w-12 h-12 text-white" /> : 
-           <Play className="w-12 h-12 text-white ml-2" />}
+          {isProcessing ? (
+            <Loader2 className="w-12 h-12 text-white animate-spin" />
+          ) : isListening ? (
+            <Square className="w-12 h-12 text-white" /> // Shows a stop square when recording
+          ) : (
+            <Mic className="w-12 h-12 text-white" />
+          )}
         </button>
 
         <p className="text-sm text-gray-500 font-medium">
-          {isListening ? "Ascoltando..." : isProcessing ? "Elaborazione..." : "Tocca per parlare"}
+          {isListening ? "Tocca per interrompere e ricevere feedback" : isProcessing ? "Elaborazione..." : "Tocca per parlare"}
         </p>
 
         {transcript && (
