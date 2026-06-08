@@ -91,8 +91,16 @@ export default function ItalianCoach() {
       setIsProcessing(true);
 
       // Call LanguageTool Brain
-      const result = await checkItalianGrammar(text);
-      setFeedback(result.message);
+    // Call Groq LLM Brain via Next.js API
+    const response = await fetch('/api/coach', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text })
+    });
+    const result = await response.json();
+
+setFeedback(result.message);
+await speak(result.message);
       
       // Speak the result out loud
       await speak(result.message);
